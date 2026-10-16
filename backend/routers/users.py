@@ -47,11 +47,18 @@ def get_user_profile(user_id: str,db: Session = Depends(get_db),):
 
 @router.get("/{user_id}/logs", response_model=UserLogsResponse)
 def get_user_logs(user_id: str,limit: int = 25,db: Session = Depends(get_db)):
-    logs = (db.query(UserLog).filter(UserLog.user_id == user_id).order_by(UserLog.timestamp.desc()).limit(limit).all())
+    logs = (
+        db.query(UserLog)
+        .filter(UserLog.user_id == user_id)
+        .order_by(UserLog.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
 
     return {
         "logs": [
             {
+                "user_id": log.user_id,
                 "log_id": log.log_id,
                 "log_desc": log.log_desc,
                 "action_required": "Yes" if log.action_required else "No",
@@ -60,5 +67,7 @@ def get_user_logs(user_id: str,limit: int = 25,db: Session = Depends(get_db)):
             for log in logs
         ]
     }
+
+    
 
 

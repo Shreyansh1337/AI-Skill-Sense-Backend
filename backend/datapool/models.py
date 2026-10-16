@@ -36,11 +36,11 @@ class Quest(Base):
     quest_intro = Column(Text, nullable=False)
 
 
-    duration_hours = Column(Integer, nullable=False, default=48)
+    duration_ms = Column(Integer, nullable=False, default=172800000)
 
     __table_args__ = (
         CheckConstraint(
-            "duration_hours > 0",
+            "duration_ms > 0",
             name="ck_quest_duration_positive",
         ),
     )

@@ -24,6 +24,7 @@ class UserProfileResponse(BaseModel):
 
 
 class UserLogResponse(BaseModel):
+    user_id : str
     log_id: str
     log_desc: str
     action_required: str

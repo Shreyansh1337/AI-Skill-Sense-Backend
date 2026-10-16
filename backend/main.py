@@ -1,12 +1,14 @@
 from contextlib import asynccontextmanager
 
+from agents.main_agent import ping_agent_service
 from database import models as user_models
 from database.connection import Base as UserBase
 from database.connection import engine as db_engine
 from datapool import models as datapool_models
 from datapool.connection import Base as DataPoolBase
 from datapool.connection import engine as dp_engine
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from routers.agent import router as agent_router
 from routers.datapool import router as datapool_router
 from routers.skills import router as skills_router
 from routers.urls import router as urls_router
@@ -18,6 +20,10 @@ from sqlalchemy import text
 async def lifespan(app: FastAPI):
     UserBase.metadata.create_all(bind=db_engine)
     DataPoolBase.metadata.create_all(bind=dp_engine)
+
+    agent_status = ping_agent_service()
+    app.state.agent_status = agent_status
+
 
     yield
 
@@ -33,6 +39,7 @@ app.include_router(urls_router)
 app.include_router(users_router)
 app.include_router(skills_router)
 app.include_router(datapool_router)
+app.include_router(agent_router)
 
 
 @app.get("/")

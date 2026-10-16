@@ -19,7 +19,7 @@ class QuestResponse(BaseModel):
     quest_id: str
     quest_title: str
     quest_intro: str
-    duration_hours: int
+    duration_ms: int
 
 
 class SkillByTypeRequest(BaseModel):
@@ -55,3 +55,13 @@ class SkillAllocationRequest(BaseModel):
 
 class SkillAllocationResponse(BaseModel):
     skill_ids: list[str] = Field(default_factory=list)
+
+
+class QuestAllocationRequest(BaseModel):
+    keywords: list[str] = Field(default_factory=list)
+    excluded_quest_ids: list[str] = Field(default_factory=list)
+    limit: int = Field(default=5, ge=1, le=100)
+
+
+class QuestAllocationResponse(BaseModel):
+    quest_ids: list[str] = Field(default_factory=list)
