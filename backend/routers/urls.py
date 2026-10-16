@@ -1,5 +1,6 @@
 from uuid import uuid4
 
+from database.models import User
 from datapool.dependencies import get_datapool_db
 from datapool.models import URLRecord
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,8 @@ from schemas.url import (
 )
 from sqlalchemy.orm import Session
 
+from routers.auth import get_current_user
+
 router = APIRouter(
     prefix="/api/urls",
     tags=["URLs"],
@@ -21,6 +24,7 @@ router = APIRouter(
 def process_url(
     request: URLProcessRequest,
     db: Session = Depends(get_datapool_db),
+    current_user: User = Depends(get_current_user),
 ):
     url = str(request.url)
 

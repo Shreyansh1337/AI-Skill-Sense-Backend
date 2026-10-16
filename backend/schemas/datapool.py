@@ -1,4 +1,6 @@
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -43,6 +45,7 @@ class SkillCreateRequest(BaseModel):
 class SkillCreateResponse(BaseModel):
     skill_id: str
 
+
 class SkillsByTypeResponse(BaseModel):
     skills: list[dict[str, str]]
 
@@ -65,3 +68,23 @@ class QuestAllocationRequest(BaseModel):
 
 class QuestAllocationResponse(BaseModel):
     quest_ids: list[str] = Field(default_factory=list)
+
+
+class QuestCreateRequest(BaseModel):
+    quest_id: str = Field(min_length=1, max_length=100)
+    seq_no: int = Field(default=1, ge=1)
+    linked_skill: list[str] = Field(default_factory=list)
+    quest_name: str = Field(min_length=1, max_length=255)
+    quest_desc: str = ""
+    quest_type: str = Field(default="Learning", max_length=30)
+    scale: str = Field(default="others", max_length=20)
+    quest_metrics: float = Field(default=0.0, ge=0)
+    template: str = ""
+    last_update: datetime | None = None
+    duration: float = Field(gt=0)
+    quest_holder_id: list[str] = Field(default_factory=list)
+
+
+class QuestCreateResponse(BaseModel):
+    quest_id: str
+    message: str

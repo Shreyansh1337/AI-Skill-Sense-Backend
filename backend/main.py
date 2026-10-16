@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from agents.main_agent import ping_agent_service
@@ -7,12 +8,14 @@ from database.connection import engine as db_engine
 from datapool import models as datapool_models
 from datapool.connection import Base as DataPoolBase
 from datapool.connection import engine as dp_engine
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from routers.agent import router as agent_router
+from routers.auth import router as auth_router
 from routers.datapool import router as datapool_router
 from routers.skills import router as skills_router
 from routers.urls import router as urls_router
 from routers.users import router as users_router
+from services.quest_expiry import quest_expiry_loop
 from sqlalchemy import text
 
 
@@ -23,12 +26,22 @@ async def lifespan(app: FastAPI):
 
     agent_status = ping_agent_service()
     app.state.agent_status = agent_status
+    #this is to check quest expiry repeatditly
+    expiry_task = asyncio.create_task(quest_expiry_loop())
 
+    try:
+        yield
+    finally:
+        # Stop the background task before shutdown.
+        expiry_task.cancel()
 
-    yield
+        try:
+            await expiry_task
+        except asyncio.CancelledError:
+            pass
 
-    db_engine.dispose()
-    dp_engine.dispose()
+        db_engine.dispose()
+        dp_engine.dispose()
 
 
 app = FastAPI(
@@ -40,6 +53,7 @@ app.include_router(users_router)
 app.include_router(skills_router)
 app.include_router(datapool_router)
 app.include_router(agent_router)
+app.include_router(auth_router)
 
 
 @app.get("/")

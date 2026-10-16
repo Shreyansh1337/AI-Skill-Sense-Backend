@@ -1,5 +1,6 @@
 from uuid import uuid4
 
+from database.models import User
 from datapool.dependencies import get_datapool_db
 from datapool.models import Quest, Skill, SkillHolder, SkillQuest
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +15,8 @@ from schemas.datapool import (
     SkillUpdateRequest,
 )
 from sqlalchemy.orm import Session
+
+from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/skills",tags=["Skills"])
 
@@ -72,6 +75,7 @@ def update_skill(
     skill_id: str,
     request: SkillUpdateRequest,
     db: Session = Depends(get_datapool_db),
+    current_user: User = Depends(get_current_user),
 ):
     skill = db.query(Skill).filter(Skill.skill_id == skill_id).first()
 
@@ -114,6 +118,7 @@ def update_skill(
 def create_skill(
     request: SkillCreateRequest,
     db: Session = Depends(get_datapool_db),
+    current_user: User = Depends(get_current_user),
 ):
     if request.skill_type not in {
         "Technical", "Fitness", "Finance", "Communication"

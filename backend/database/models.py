@@ -1,33 +1,38 @@
+from datetime import datetime, timezone
+
 from database.connection import Base
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     Column,
     DateTime,
-    Index,
+    Float,
     Integer,
     String,
     Text,
     UniqueConstraint,
-    func,
 )
-from sqlalchemy.types import JSON
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
 
 
 class User(Base):
     __tablename__ = "users"
 
-
     user_id = Column(String(50), primary_key=True)
     username = Column(String(100), nullable=False)
     email = Column(String(255), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+
     age = Column(Integer, nullable=True)
     gender = Column(String(50), nullable=True)
-
     interests = Column(JSON, nullable=False, default=list)
 
     summary = Column(Text, nullable=True)
-    occupation = Column(String(150), nullable=True)
+    occupation = Column(String(255), nullable=True)
     experience = Column(Text, nullable=True)
     education_status = Column(String(100), nullable=True)
     education_summary = Column(Text, nullable=True)
@@ -35,82 +40,56 @@ class User(Base):
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        default=utc_now,
     )
 
 
 class UserLog(Base):
-  
-
     __tablename__ = "user_logs"
 
-    log_id = Column(String(50), primary_key=True)
-    user_id = Column(String(50),nullable=False,index=True)
-
-    log_desc = Column(Text, nullable=False)
-    action_required = Column(Boolean, nullable=False, default=False)
-    timestamp = Column(DateTime(timezone=True),nullable=False,server_default=func.now(),index=True)
-
-
-class RecentLog(Base):
-
-
-    __tablename__ = "recent_logs"
-
-    log_id = Column(String(50), primary_key=True)
+    log_id = Column(String(100), primary_key=True)
     user_id = Column(String(50), nullable=False, index=True)
-
     log_desc = Column(Text, nullable=False)
     action_required = Column(Boolean, nullable=False, default=False)
-
     timestamp = Column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        default=utc_now,
+        index=True,
+    )
+
+
+class RecentLog(Base):
+    __tablename__ = "recent_logs"
+
+    log_id = Column(String(100), primary_key=True)
+    user_id = Column(String(50), nullable=False, index=True)
+    log_desc = Column(Text, nullable=False)
+    action_required = Column(Boolean, nullable=False, default=False)
+    timestamp = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
         index=True,
     )
 
 
 class UserSkill(Base):
-    """
-    Relational link between a user and a skill in the DataPool.
-    skill_id is validated by the application because the DataPool
-    is in a separate PostgreSQL database.
-    """
-
     __tablename__ = "user_skills"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(50),nullable=False,index=True)
-    skill_id = Column(String(50),nullable=False,index=True)
-    acquired_at = Column(DateTime(timezone=True),nullable=False,server_default=func.now())
+    user_id = Column(String(50), primary_key=True)
+    skill_id = Column(String(50), primary_key=True)
 
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "skill_id",
-            name="uq_user_skill",
-        ),
+    acquired_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
     )
 
 
+
 class UserQuest(Base):
-    """
-    Relational link between a user and a quest in the DataPool.
-    One row tracks the user's progress on one quest.
-    """
-
     __tablename__ = "user_quests"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(50),nullable=False,index=True)
-    quest_id = Column(String(50),nullable=False,index=True)
-
-    status = Column(String(20),nullable=False,default="active",server_default="active")
-    started_at = Column(DateTime(timezone=True),nullable=False,server_default=func.now())
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-    expired_at = Column(DateTime(timezone=True), nullable=True)
-    updated_at = Column(DateTime(timezone=True),nullable=False,server_default=func.now(),onupdate=func.now())
 
     __table_args__ = (
         UniqueConstraint(
@@ -119,12 +98,42 @@ class UserQuest(Base):
             name="uq_user_quest",
         ),
         CheckConstraint(
+            "progress >= 0.0 AND progress <= 1.0",
+            name="ck_user_quest_progress_range",
+        ),
+        CheckConstraint(
             "status IN ('active', 'completed', 'failed')",
             name="ck_user_quest_status",
         ),
-        Index(
-            "ix_user_quests_status_started",
-            "status",
-            "started_at",
-        ),
+    )
+
+    # Match the existing PostgreSQL primary key
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+
+    user_id = Column(String(50), nullable=False, index=True)
+    quest_id = Column(String(100), nullable=False, index=True)
+
+    # Duration is stored in milliseconds
+    duration_ms = Column(Integer, nullable=True)
+
+    # Independent progress for each user's assignment: 0.0 to 1.0
+    progress = Column(Float, nullable=False, default=0.0)
+
+    status = Column(String(20), nullable=False, default="active")
+
+    # allocation_time in the API contract maps to started_at
+    started_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    expired_at = Column(DateTime(timezone=True), nullable=True)
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
     )
