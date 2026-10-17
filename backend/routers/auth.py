@@ -1,5 +1,6 @@
-from uuid import uuid4
+import hmac
 import os
+from uuid import uuid4
 import jwt
 from database.connection import SessionLocal
 from database.models import User
@@ -28,6 +29,23 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def require_agent_secret(
+    x_agent_secret: str | None = Header(None, alias="X-Agent-Secret"),
+) -> None:
+    if not AGENT_SECRET_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Agent authentication is not configured.",
+        )
+    if not x_agent_secret or not hmac.compare_digest(
+        x_agent_secret, AGENT_SECRET_KEY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid agent secret key.",
+        )
 
 
 @router.post(
@@ -113,26 +131,25 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     x_agent_secret: str | None = Header(None, alias="X-Agent-Secret"),
     db: Session = Depends(get_db),
-) -> User:
+) -> User | None:
     """
     Unified dependency keeping the exact name 'get_current_user'. 
     Supports standard user Bearer tokens OR background agent X-Agent-Secret headers.
     """
-    if not SECRET_KEY:
-        raise RuntimeError("JWT_SECRET_KEY is not configured.")
-
     # 1. Handle Internal Agent Request via Header
     if x_agent_secret:
-        if not AGENT_SECRET_KEY or x_agent_secret != AGENT_SECRET_KEY:
+        if not AGENT_SECRET_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Agent authentication is not configured.",
+            )
+        if not hmac.compare_digest(x_agent_secret, AGENT_SECRET_KEY):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid agent secret key.",
             )
         if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User ID context missing for agent request.",
-            )
+            return None
         user = db.query(User).filter(User.user_id == user_id).first()
         if user is None:
             raise HTTPException(
@@ -142,6 +159,9 @@ def get_current_user(
         return user
 
     # 2. Handle Standard User Token Request
+    if not SECRET_KEY:
+        raise RuntimeError("JWT_SECRET_KEY is not configured.")
+
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired authentication token.",
@@ -191,6 +211,11 @@ def get_current_user(
 def read_current_user(
     current_user: User = Depends(get_current_user),
 ):
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A user access token is required.",
+        )
     return {
         "user_id": current_user.user_id,
         "username": current_user.username,

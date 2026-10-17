@@ -1,8 +1,16 @@
 
 from database.dependencies import get_db
 from database.models import User, UserLog, UserQuest, UserSkill
+from datapool.dependencies import get_datapool_db
+from datapool.models import Quest, Skill
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from schemas.user import UserLogsResponse, UserProfileResponse
+from schemas.user import (
+    UserAssignmentRequest,
+    UserAssignmentResponse,
+    UserLogsResponse,
+    UserProfileResponse,
+)
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from routers.auth import get_current_user
@@ -110,4 +118,130 @@ def get_user_logs(
             }
             for log in logs
         ]
+    }
+
+
+@router.post(
+    "/{user_id}/assignments",
+    response_model=UserAssignmentResponse,
+)
+def assign_user_recommendation(
+    user_id: str,
+    request: UserAssignmentRequest,
+    db: Session = Depends(get_db),
+    datapool_db: Session = Depends(get_datapool_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A user or agent credential is required.",
+        )
+
+    if request.assignment_type == "Skill":
+        item = (
+            datapool_db.query(Skill)
+            .filter(Skill.skill_id == request.item_id)
+            .first()
+        )
+        if item is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Skill not found in the DataPool.",
+            )
+
+        assignment = (
+            db.query(UserSkill)
+            .filter(
+                UserSkill.user_id == user_id,
+                UserSkill.skill_id == request.item_id,
+            )
+            .first()
+        )
+        if assignment is not None:
+            return {
+                "status": "already_assigned",
+                "user_id": user_id,
+                "assignment_type": request.assignment_type,
+                "item_id": request.item_id,
+            }
+
+        db.add(UserSkill(user_id=user_id, skill_id=request.item_id))
+    else:
+        item = (
+            datapool_db.query(Quest)
+            .filter(Quest.quest_id == request.item_id)
+            .first()
+        )
+        if item is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Quest not found in the DataPool.",
+            )
+
+        assignment = (
+            db.query(UserQuest)
+            .filter(
+                UserQuest.user_id == user_id,
+                UserQuest.quest_id == request.item_id,
+            )
+            .first()
+        )
+        if assignment is not None:
+            return {
+                "status": "already_assigned",
+                "user_id": user_id,
+                "assignment_type": request.assignment_type,
+                "item_id": request.item_id,
+            }
+
+        db.add(
+            UserQuest(
+                user_id=user_id,
+                quest_id=request.item_id,
+                duration_ms=item.duration_ms,
+                progress=0.0,
+                status="active",
+            )
+        )
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if request.assignment_type == "Skill":
+            existing = (
+                db.query(UserSkill)
+                .filter(
+                    UserSkill.user_id == user_id,
+                    UserSkill.skill_id == request.item_id,
+                )
+                .first()
+            )
+        else:
+            existing = (
+                db.query(UserQuest)
+                .filter(
+                    UserQuest.user_id == user_id,
+                    UserQuest.quest_id == request.item_id,
+                )
+                .first()
+            )
+        if existing is None:
+            raise
+        return {
+            "status": "already_assigned",
+            "user_id": user_id,
+            "assignment_type": request.assignment_type,
+            "item_id": request.item_id,
+        }
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "status": "assigned",
+        "user_id": user_id,
+        "assignment_type": request.assignment_type,
+        "item_id": request.item_id,
     }

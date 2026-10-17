@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -33,3 +34,15 @@ class UserLogResponse(BaseModel):
 
 class UserLogsResponse(BaseModel):
     logs: list[UserLogResponse]
+
+
+class UserAssignmentRequest(BaseModel):
+    assignment_type: Literal["Skill", "Quest"]
+    item_id: str = Field(min_length=1, max_length=100)
+
+
+class UserAssignmentResponse(BaseModel):
+    status: Literal["assigned", "already_assigned"]
+    user_id: str
+    assignment_type: Literal["Skill", "Quest"]
+    item_id: str
