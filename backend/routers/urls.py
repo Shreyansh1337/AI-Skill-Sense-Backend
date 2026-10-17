@@ -17,6 +17,9 @@ from sqlalchemy.orm import Session
 
 from routers.auth import get_current_user, require_agent_secret
 
+import ipaddress
+from urllib.parse import urlparse
+
 router = APIRouter(
     prefix="/api/urls",
     tags=["URLs"],
@@ -24,9 +27,60 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
+def is_valid_target_url(url_str: str) -> bool:
+    try:
+        parsed = urlparse(url_str)
+        
+        # 1. Ensure valid web schemes
+        if parsed.scheme not in ("http", "https"):
+            return False
+            
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        hostname_lower = hostname.lower()
+
+        # 2. Block localhost, loopbacks, and container host aliases
+        blocked_hostnames = {
+            "localhost", 
+            "127.0.0.1", 
+            "0.0.0.0", 
+            "::1", 
+            "host.docker.internal",
+            "gateway.docker.internal"
+        }
+        if hostname_lower in blocked_hostnames:
+            return False
+
+        # 3. Block internal/local TLDs
+        if hostname_lower.endswith((".local", ".internal", ".test", ".localhost", ".lan", ".corp")):
+            return False
+
+        # 4. Block private/internal IP ranges (SSRF protection)
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if (
+                ip.is_private 
+                or ip.is_loopback 
+                or ip.is_link_local 
+                or ip.is_reserved 
+                or ip.is_multicast
+            ):
+                return False
+        except ValueError:
+            # Not a raw IP address (it's a domain name like example.com), which is allowed dynamically!
+            pass
+
+        return True
+    except Exception:
+        return False
 
 def dispatch_next_unvisited_url() -> None:
+    # 1. Open a short-lived session strictly to claim the next unvisited URL
     db = SessionLocal()
+    url_id = None
+    url_str = None
     try:
         url_record = (
             db.query(URLRecord)
@@ -39,19 +93,26 @@ def dispatch_next_unvisited_url() -> None:
             db.rollback()
             return
 
-        result = trigger_extractor(url_record.url_id, url_record.url)
-        if result.get("status") != "success":
-            raise RuntimeError(
-                f"Extractor did not complete URL {url_record.url_id}."
-            )
-
+        # Mark as visited immediately and commit to release the row lock & connection
         url_record.is_visited = "Yes"
+        url_id = url_record.url_id
+        url_str = url_record.url
         db.commit()
     except Exception:
         db.rollback()
-        logger.exception("Failed to dispatch the next unvisited URL.")
+        logger.exception("Failed to claim the next unvisited URL.")
+        return
     finally:
-        db.close()
+        db.close()  # Connection is returned to the pool instantly!
+
+    # 2. Run the long extractor workflow completely outside of the database session
+    if url_id and url_str:
+        try:
+            result = trigger_extractor(url_id, url_str)
+            if result.get("status") != "success":
+                logger.error(f"Extractor did not complete URL {url_id}.")
+        except Exception:
+            logger.exception(f"Error executing extractor for URL {url_id}.")
 
 
 @router.post("/process", response_model=URLProcessResponse)
@@ -62,6 +123,14 @@ def process_url(
     _current_user: User | None = Depends(get_current_user),
 ):
     url = str(request.url)
+    
+    # Filter out invalid, internal, or non-whitelisted URLs
+    if not is_valid_target_url(url):
+        logger.warning(f"Blocked untrusted or internal URL attempt: {url}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="URL is blocked (internal addresses or non-whitelisted domains are not permitted)."
+        )
 
     existing_url = db.query(URLRecord).filter(URLRecord.url == url).first()
 
