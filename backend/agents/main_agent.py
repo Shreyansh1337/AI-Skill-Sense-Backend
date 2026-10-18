@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import os
-from random import random
+from random import uniform
 import httpx
 import logging
 import time
@@ -19,7 +19,7 @@ MAIN_AGENT_RETRY_DELAY_CAP_SECONDS = 300
 def _backoff_delay(attempt: int) -> float:
     # Start with a gentler 10s base, scale up, and add random jitter (0-5s) to avoid synchronized retries
     base_delay = min(10 * (2 ** attempt), MAIN_AGENT_RETRY_DELAY_CAP_SECONDS)
-    jitter = random.uniform(0, 5)
+    jitter = uniform(0, 5)
     return base_delay + jitter
 
 
