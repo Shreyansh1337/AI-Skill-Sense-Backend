@@ -47,10 +47,11 @@ def create_user_log(
         db.rollback()
         raise
 
-    background_tasks.add_task(
-        trigger_main_agent_in_background,
-        update_id=log.log_id,
-        user_id=log.user_id,
-        action_required="Yes" if log.action_required else "No",
-    )
+    if log.action_required:
+        background_tasks.add_task(
+            trigger_main_agent_in_background,
+            update_id=log.log_id,
+            user_id=log.user_id,
+            action_required="Yes",
+        )
     return log

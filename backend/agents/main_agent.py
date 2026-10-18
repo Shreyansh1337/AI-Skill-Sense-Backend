@@ -156,11 +156,16 @@ def trigger_main_agent(
             delay = _retry_delay(response, attempt)
             logger.warning(
                 "Main Agent returned HTTP %d; retrying in %.0f seconds "
-                "(attempt %d/%d).",
+                "(attempt %d/%d, server=%s, render_id=%s, cf_ray=%s, "
+                "retry_after=%s).",
                 response.status_code,
                 delay,
                 attempt + 2,
                 MAIN_AGENT_MAX_ATTEMPTS,
+                response.headers.get("Server", "unknown"),
+                response.headers.get("rndr-id", "unavailable"),
+                response.headers.get("CF-Ray", "unavailable"),
+                response.headers.get("Retry-After", "unavailable"),
             )
             time.sleep(delay)
             continue
@@ -168,6 +173,16 @@ def trigger_main_agent(
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            if response.status_code in MAIN_AGENT_RETRYABLE_STATUSES:
+                logger.error(
+                    "Main Agent exhausted retries after HTTP %d "
+                    "(server=%s, render_id=%s, cf_ray=%s, retry_after=%s).",
+                    response.status_code,
+                    response.headers.get("Server", "unknown"),
+                    response.headers.get("rndr-id", "unavailable"),
+                    response.headers.get("CF-Ray", "unavailable"),
+                    response.headers.get("Retry-After", "unavailable"),
+                )
             raise RuntimeError(
                 "Main Agent service returned HTTP "
                 f"{response.status_code} after {attempt + 1} attempt(s)."
