@@ -113,16 +113,6 @@ def dispatch_next_unvisited_url() -> None:
                 logger.error(f"Extractor did not complete URL {url_id}.")
         except Exception:
             logger.exception(f"Error executing extractor for URL {url_id}.")
-            
-@router.post("/dispatch-next", status_code=status.HTTP_202_ACCEPTED)
-def dispatch_next_url(
-    background_tasks: BackgroundTasks,
-):
-    """
-    Unprotected manual nudge endpoint to trigger the next queued URL processing task.
-    """
-    background_tasks.add_task(dispatch_next_unvisited_url)
-    return {"status": "accepted", "message": "URL dispatch has been queued successfully."}
 
 
 @router.post("/process", response_model=URLProcessResponse)
@@ -195,16 +185,15 @@ def get_url_id(
             db.rollback()
             raise
 
-    if existing_url.is_visited != "Yes":
-        background_tasks.add_task(dispatch_next_unvisited_url)
-
     return {"url_id": existing_url.url_id}
 
 
 @router.post("/dispatch-next", status_code=status.HTTP_202_ACCEPTED)
 def dispatch_next_url(
     background_tasks: BackgroundTasks,
-    _agent_secret: None = Depends(require_agent_secret),
 ):
+    """
+    Unprotected manual nudge endpoint to trigger the next queued URL processing task.
+    """
     background_tasks.add_task(dispatch_next_unvisited_url)
-    return {"status": "accepted", "message": "URL dispatch has been queued."}
+    return {"status": "accepted", "message": "URL dispatch has been queued successfully."}
