@@ -15,6 +15,7 @@ from routers.datapool import router as datapool_router
 from routers.skills import router as skills_router
 from routers.urls import router as urls_router
 from routers.users import router as users_router
+from routers.webhooks import router as webhooks_router
 from services.quest_expiry import quest_expiry_loop
 from sqlalchemy import text
 
@@ -54,6 +55,7 @@ app.include_router(skills_router)
 app.include_router(datapool_router)
 app.include_router(agent_router)
 app.include_router(auth_router)
+app.include_router(webhooks_router)
 
 
 @app.get("/")

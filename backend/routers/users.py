@@ -3,22 +3,45 @@ from database.dependencies import get_db
 from database.models import User, UserLog, UserQuest, UserSkill
 from datapool.dependencies import get_datapool_db
 from datapool.models import Quest, Skill
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from schemas.user import (
     UserAssignmentRequest,
     UserAssignmentResponse,
+    UserLogCreateRequest,
+    UserLogResponse,
     UserLogsResponse,
     UserProfileResponse,
+    UserProfileWriteRequest,
+    UserProfileWriteResponse,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from routers.auth import get_current_user
+from services.user_logs import create_user_log
 
 router = APIRouter(
     prefix="/api/users",
     tags=["Users"],
 )
+
+PROFILE_FIELDS = (
+    "age",
+    "gender",
+    "interests",
+    "summary",
+    "occupation",
+    "experience",
+    "education_status",
+    "education_summary",
+)
+
+
+def _profile_has_data(user: User) -> bool:
+    return any(
+        value not in (None, [], "")
+        for value in (getattr(user, field) for field in PROFILE_FIELDS)
+    )
 
 
 @router.get("/{user_id}/profile", response_model=UserProfileResponse)
@@ -86,6 +109,101 @@ def get_user_profile(
     }
 
 
+@router.post(
+    "/{user_id}/profile",
+    response_model=UserProfileWriteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_user_profile(
+    user_id: str,
+    request: UserProfileWriteRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user),
+):
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A user access token is required.",
+        )
+    if user_id != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot create another user's profile.",
+        )
+    if _profile_has_data(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A user profile already exists; use the profile update route.",
+        )
+
+    profile_data = request.model_dump(exclude_unset=True)
+    if not any(value not in (None, [], "") for value in profile_data.values()):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one non-empty profile field is required.",
+        )
+
+    for field, value in profile_data.items():
+        setattr(current_user, field, value)
+
+    create_user_log(
+        db,
+        background_tasks,
+        current_user.user_id,
+        "new_profile",
+        "Created user profile.",
+    )
+    return {"status": "created", "user_id": current_user.user_id}
+
+
+@router.put(
+    "/{user_id}/profile",
+    response_model=UserProfileWriteResponse,
+)
+def update_user_profile(
+    user_id: str,
+    request: UserProfileWriteRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user),
+):
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A user access token is required.",
+        )
+    if user_id != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot update another user's profile.",
+        )
+    if not _profile_has_data(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Create the user profile before updating it.",
+        )
+
+    profile_data = request.model_dump(exclude_unset=True)
+    if not profile_data:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one profile field must be provided.",
+        )
+
+    for field, value in profile_data.items():
+        setattr(current_user, field, value)
+
+    create_user_log(
+        db,
+        background_tasks,
+        current_user.user_id,
+        "profile_update",
+        "Updated user profile.",
+    )
+    return {"status": "updated", "user_id": current_user.user_id}
+
+
 @router.get("/{user_id}/logs", response_model=UserLogsResponse)
 def get_user_logs(
     user_id: str,
@@ -118,6 +236,45 @@ def get_user_logs(
             }
             for log in logs
         ]
+    }
+
+
+@router.post(
+    "/{user_id}/logs",
+    response_model=UserLogResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_user_log_route(
+    user_id: str,
+    request: UserLogCreateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user),
+):
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A user access token is required.",
+        )
+    if user_id != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot create another user's logs.",
+        )
+
+    log = create_user_log(
+        db,
+        background_tasks,
+        current_user.user_id,
+        request.activity_type,
+        request.log_desc,
+    )
+    return {
+        "user_id": log.user_id,
+        "log_id": log.log_id,
+        "log_desc": log.log_desc,
+        "action_required": "Yes" if log.action_required else "No",
+        "timestamp": log.timestamp,
     }
 
 

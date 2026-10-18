@@ -36,6 +36,32 @@ class UserLogsResponse(BaseModel):
     logs: list[UserLogResponse]
 
 
+class UserProfileWriteRequest(BaseModel):
+    age: int | None = None
+    gender: str | None = None
+    interests: list[str] | None = None
+    summary: str | None = None
+    occupation: str | None = None
+    experience: str | None = None
+    education_status: str | None = None
+    education_summary: str | None = None
+
+
+class UserProfileWriteResponse(BaseModel):
+    status: Literal["created", "updated"]
+    user_id: str
+
+
+class UserLogCreateRequest(BaseModel):
+    activity_type: str = Field(min_length=1, max_length=100)
+    log_desc: str = Field(min_length=1, max_length=5000)
+
+
+class ActivityWebhookRequest(UserLogCreateRequest):
+    user_id: str = Field(min_length=1, max_length=50)
+    event_id: str | None = Field(default=None, min_length=1, max_length=255)
+
+
 class UserAssignmentRequest(BaseModel):
     assignment_type: Literal["Skill", "Quest"]
     item_id: str = Field(min_length=1, max_length=100)
