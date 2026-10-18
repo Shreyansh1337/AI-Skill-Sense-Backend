@@ -7,16 +7,26 @@ import time
 
 
 logger = logging.getLogger(__name__)
-MAIN_AGENT_MAX_ATTEMPTS = 4
+MAIN_AGENT_MAX_ATTEMPTS = 5
 MAIN_AGENT_RETRYABLE_STATUSES = {429, 503}
 MAIN_AGENT_RETRYABLE_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout)
+MAIN_AGENT_CONNECT_TIMEOUT_SECONDS = 30.0
+MAIN_AGENT_READ_TIMEOUT_SECONDS = 300.0
+MAIN_AGENT_RETRY_DELAY_CAP_SECONDS = 60
+
+
+def _backoff_delay(attempt: int) -> float:
+    return min(5 * (2 ** attempt), MAIN_AGENT_RETRY_DELAY_CAP_SECONDS)
 
 
 def _retry_delay(response: httpx.Response, attempt: int) -> float:
     retry_after = response.headers.get("Retry-After")
     if retry_after:
         try:
-            return min(max(float(retry_after), 0), 30)
+            return min(
+                max(float(retry_after), 0),
+                MAIN_AGENT_RETRY_DELAY_CAP_SECONDS,
+            )
         except ValueError:
             try:
                 retry_at = parsedate_to_datetime(retry_after)
@@ -24,11 +34,11 @@ def _retry_delay(response: httpx.Response, attempt: int) -> float:
                     retry_at = retry_at.replace(tzinfo=timezone.utc)
                 return min(
                     max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0),
-                    30,
+                    MAIN_AGENT_RETRY_DELAY_CAP_SECONDS,
                 )
             except (TypeError, ValueError, OverflowError):
                 logger.warning("Agent returned an invalid Retry-After header.")
-    return min(2 ** (attempt + 1), 30)
+    return _backoff_delay(attempt)
 
 
 def _agent_headers() -> dict[str, str]:
@@ -110,7 +120,12 @@ def trigger_main_agent(
                 endpoint,
                 json=payload,
                 headers=headers,
-                timeout=300.0,
+                timeout=httpx.Timeout(
+                    MAIN_AGENT_READ_TIMEOUT_SECONDS,
+                    connect=MAIN_AGENT_CONNECT_TIMEOUT_SECONDS,
+                    write=30.0,
+                    pool=10.0,
+                ),
             )
         except MAIN_AGENT_RETRYABLE_ERRORS as exc:
             if attempt + 1 == MAIN_AGENT_MAX_ATTEMPTS:
@@ -118,7 +133,7 @@ def trigger_main_agent(
                     "Failed to communicate with the Main Agent service after "
                     f"{MAIN_AGENT_MAX_ATTEMPTS} attempts."
                 ) from exc
-            delay = min(2 ** (attempt + 1), 30)
+            delay = _backoff_delay(attempt)
             logger.warning(
                 "Main Agent request failed transiently; retrying in %.0f "
                 "seconds (attempt %d/%d): %s",
