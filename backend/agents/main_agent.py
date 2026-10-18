@@ -1,9 +1,34 @@
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import os
 import httpx
 import logging
+import time
 
 
 logger = logging.getLogger(__name__)
+MAIN_AGENT_MAX_ATTEMPTS = 4
+MAIN_AGENT_RETRYABLE_STATUSES = {429, 503}
+MAIN_AGENT_RETRYABLE_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout)
+
+
+def _retry_delay(response: httpx.Response, attempt: int) -> float:
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(max(float(retry_after), 0), 30)
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(retry_after)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                return min(
+                    max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0),
+                    30,
+                )
+            except (TypeError, ValueError, OverflowError):
+                logger.warning("Agent returned an invalid Retry-After header.")
+    return min(2 ** (attempt + 1), 30)
 
 
 def _agent_headers() -> dict[str, str]:
@@ -30,8 +55,22 @@ def ping_agent_service() -> dict:
             "status": "connected",
             "message": "Agent service is reachable.",
         }
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            logger.warning(
+                "Agent service is reachable but rate-limited its startup health check."
+            )
+            return {
+                "status": "rate_limited",
+                "message": "Agent service responded to the health check with HTTP 429.",
+            }
+        logger.warning("Agent service health check failed: %s", exc)
+        return {
+            "status": "unavailable",
+            "message": "Backend started, but agent service is not reachable.",
+        }
     except httpx.HTTPError as exc:
-        print(f"Agent service is not reachable yet: {exc}")
+        logger.warning("Agent service is not reachable yet: %s", exc)
         return {
             "status": "unavailable",
             "message": "Backend started, but agent service is not reachable.",
@@ -64,22 +103,90 @@ def trigger_main_agent(
         "action_required": action_required,
     }
 
-    try:
-        response = httpx.post(
-            f"{agent_url}/agents/main-agent/trigger",
-            json=payload,
-            headers=headers,
-            timeout=300.0,
-        )
-        response.raise_for_status()
+    endpoint = f"{agent_url}/agents/main-agent/trigger"
+    for attempt in range(MAIN_AGENT_MAX_ATTEMPTS):
+        try:
+            response = httpx.post(
+                endpoint,
+                json=payload,
+                headers=headers,
+                timeout=300.0,
+            )
+        except MAIN_AGENT_RETRYABLE_ERRORS as exc:
+            if attempt + 1 == MAIN_AGENT_MAX_ATTEMPTS:
+                raise RuntimeError(
+                    "Failed to communicate with the Main Agent service after "
+                    f"{MAIN_AGENT_MAX_ATTEMPTS} attempts."
+                ) from exc
+            delay = min(2 ** (attempt + 1), 30)
+            logger.warning(
+                "Main Agent request failed transiently; retrying in %.0f "
+                "seconds (attempt %d/%d): %s",
+                delay,
+                attempt + 2,
+                MAIN_AGENT_MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(delay)
+            continue
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                "Failed to communicate with the Main Agent service."
+            ) from exc
+
+        if (
+            response.status_code in MAIN_AGENT_RETRYABLE_STATUSES
+            and attempt + 1 < MAIN_AGENT_MAX_ATTEMPTS
+        ):
+            delay = _retry_delay(response, attempt)
+            logger.warning(
+                "Main Agent returned HTTP %d; retrying in %.0f seconds "
+                "(attempt %d/%d).",
+                response.status_code,
+                delay,
+                attempt + 2,
+                MAIN_AGENT_MAX_ATTEMPTS,
+            )
+            time.sleep(delay)
+            continue
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                "Main Agent service returned HTTP "
+                f"{response.status_code} after {attempt + 1} attempt(s)."
+            ) from exc
+        try:
+            agent_response = response.json()
+        except ValueError as exc:
+            raise RuntimeError(
+                "Main Agent service returned invalid JSON after a successful response."
+            ) from exc
         return {
             "status": "success",
             "message": "Main Agent triggered successfully.",
-            "agent_response": response.json(),
+            "agent_response": agent_response,
         }
-    except httpx.HTTPError as exc:
-        logger.exception("Failed to trigger Main Agent service.")
-        raise RuntimeError("Failed to communicate with the agent service.") from exc
+
+    raise RuntimeError("Main Agent trigger exhausted retries without a response.")
+
+
+def trigger_main_agent_in_background(
+    update_id: str,
+    user_id: str,
+    action_required: str,
+) -> None:
+    try:
+        trigger_main_agent(update_id, user_id, action_required)
+    except RuntimeError as exc:
+        logger.error(
+            "Main Agent nudge failed after retries for update_id=%s "
+            "user_id=%s: %s",
+            update_id,
+            user_id,
+            exc,
+        )
 
 
 def trigger_extractor(url_id: str, url: str) -> dict:

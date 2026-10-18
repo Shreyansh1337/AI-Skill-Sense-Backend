@@ -1,12 +1,13 @@
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from agents.main_agent import trigger_main_agent
+from agents.main_agent import trigger_main_agent_in_background
 from database.models import UserLog
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
 ACTION_REQUIRED_ACTIVITY_TYPES = {
     "new_skill",
+    "new_quest",
     "new_profile",
     "profile_update",
     "quest_completion",
@@ -47,7 +48,7 @@ def create_user_log(
         raise
 
     background_tasks.add_task(
-        trigger_main_agent,
+        trigger_main_agent_in_background,
         update_id=log.log_id,
         user_id=log.user_id,
         action_required="Yes" if log.action_required else "No",
