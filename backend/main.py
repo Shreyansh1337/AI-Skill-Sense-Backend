@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from agents.main_agent import ping_agent_service
@@ -9,9 +10,11 @@ from datapool import models as datapool_models
 from datapool.connection import Base as DataPoolBase
 from datapool.connection import engine as dp_engine
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from routers.agent import router as agent_router
 from routers.auth import router as auth_router
 from routers.datapool import router as datapool_router
+from routers.health_connect import router as health_connect_router
 from routers.skills import router as skills_router
 from routers.urls import router as urls_router
 from routers.users import router as users_router
@@ -49,6 +52,26 @@ app = FastAPI(
     title="AI Skill Sense Backend",
     lifespan=lifespan,
 )
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "FRONTEND_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Agent-Secret",
+        "X-Health-Connect-Token",
+    ],
+)
 app.include_router(urls_router)
 app.include_router(users_router)
 app.include_router(skills_router)
@@ -56,6 +79,7 @@ app.include_router(datapool_router)
 app.include_router(agent_router)
 app.include_router(auth_router)
 app.include_router(webhooks_router)
+app.include_router(health_connect_router)
 
 
 @app.get("/")

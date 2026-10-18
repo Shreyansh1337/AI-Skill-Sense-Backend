@@ -1,9 +1,19 @@
 
+from datetime import datetime, timezone
+
 from database.dependencies import get_db
-from database.models import User, UserLog, UserQuest, UserSkill
+from database.models import (
+    HealthConnectDevice,
+    User,
+    UserLog,
+    UserQuest,
+    UserSkill,
+    UserWebhookCredential,
+)
 from datapool.dependencies import get_datapool_db
-from datapool.models import Quest, Skill
+from datapool.models import Quest, Skill, SkillQuest
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from schemas.user import (
     UserAssignmentRequest,
     UserAssignmentResponse,
@@ -37,11 +47,201 @@ PROFILE_FIELDS = (
 )
 
 
+class QuestProgressUpdate(BaseModel):
+    delta: float = Field(gt=0, le=1)
+
+
 def _profile_has_data(user: User) -> bool:
     return any(
         value not in (None, [], "")
         for value in (getattr(user, field) for field in PROFILE_FIELDS)
     )
+
+
+@router.get("/{user_id}/dashboard")
+def get_user_dashboard(
+    user_id: str,
+    db: Session = Depends(get_db),
+    datapool_db: Session = Depends(get_datapool_db),
+    current_user: User | None = Depends(get_current_user),
+):
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A user access token is required.",
+        )
+    if user_id != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot access another user's dashboard.",
+        )
+
+    user_skills = (
+        db.query(UserSkill.skill_id)
+        .filter(UserSkill.user_id == user_id)
+        .all()
+    )
+    skill_ids = [skill_id for (skill_id,) in user_skills]
+    skills = (
+        datapool_db.query(Skill)
+        .filter(Skill.skill_id.in_(skill_ids))
+        .all()
+        if skill_ids
+        else []
+    )
+
+    user_quests = (
+        db.query(UserQuest)
+        .filter(UserQuest.user_id == user_id)
+        .order_by(UserQuest.started_at.desc())
+        .all()
+    )
+    quest_ids = [user_quest.quest_id for user_quest in user_quests]
+    quests = (
+        datapool_db.query(Quest)
+        .filter(Quest.quest_id.in_(quest_ids))
+        .all()
+        if quest_ids
+        else []
+    )
+    quest_by_id = {quest.quest_id: quest for quest in quests}
+
+    linked_skills_by_quest: dict[str, list[str]] = {}
+    if skill_ids and quest_ids:
+        for skill_id, quest_id in (
+            datapool_db.query(SkillQuest.skill_id, SkillQuest.quest_id)
+            .filter(
+                SkillQuest.skill_id.in_(skill_ids),
+                SkillQuest.quest_id.in_(quest_ids),
+            )
+            .all()
+        ):
+            linked_skills_by_quest.setdefault(quest_id, []).append(skill_id)
+
+    connected_health = (
+        db.query(HealthConnectDevice.user_id)
+        .filter(HealthConnectDevice.user_id == user_id)
+        .first()
+        is not None
+    )
+    connected_webhook = (
+        db.query(UserWebhookCredential.user_id)
+        .filter(UserWebhookCredential.user_id == user_id)
+        .first()
+        is not None
+    )
+    completed_count = sum(
+        user_quest.status == "completed" for user_quest in user_quests
+    )
+
+    return {
+        "user_id": current_user.user_id,
+        "username": current_user.username,
+        "email": current_user.email,
+        "total_xp": completed_count * 150,
+        "fitness_connected": connected_health,
+        "webhook_connected": connected_webhook,
+        "skills": [
+            {
+                "skill_id": skill.skill_id,
+                "skill_type": skill.skill_type,
+                "skill_title": skill.skill_title,
+                "skill_intro": skill.skill_intro or "",
+            }
+            for skill in skills
+        ],
+        "quests": [
+            {
+                "quest_id": user_quest.quest_id,
+                "linked_skill": linked_skills_by_quest.get(
+                    user_quest.quest_id,
+                    [],
+                ),
+                "quest_name": quest_by_id[user_quest.quest_id].quest_title,
+                "quest_desc": quest_by_id[user_quest.quest_id].quest_intro or "",
+                "quest_type": quest_by_id[user_quest.quest_id].quest_type,
+                "scale": quest_by_id[user_quest.quest_id].scale,
+                "progress": user_quest.progress,
+                "quest_metrics": quest_by_id[user_quest.quest_id].quest_metrics,
+                "allocation_time": user_quest.started_at,
+                "duration": (
+                    (user_quest.duration_ms or quest_by_id[user_quest.quest_id].duration_ms)
+                    / 60000
+                ),
+                "status": user_quest.status,
+            }
+            for user_quest in user_quests
+            if user_quest.quest_id in quest_by_id
+        ],
+    }
+
+
+@router.post("/{user_id}/quests/{quest_id}/progress")
+def update_user_quest_progress(
+    user_id: str,
+    quest_id: str,
+    request: QuestProgressUpdate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user),
+):
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A user access token is required.",
+        )
+    if user_id != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot update another user's quest.",
+        )
+
+    assignment = (
+        db.query(UserQuest)
+        .filter(
+            UserQuest.user_id == user_id,
+            UserQuest.quest_id == quest_id,
+        )
+        .first()
+    )
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Quest assignment not found.",
+        )
+    if assignment.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only active quests can receive progress.",
+        )
+
+    assignment.progress = min(1.0, assignment.progress + request.delta)
+    assignment.updated_at = datetime.now(timezone.utc)
+    completed = assignment.progress >= 1.0
+    if completed:
+        assignment.status = "completed"
+        assignment.completed_at = assignment.updated_at
+        create_user_log(
+            db,
+            background_tasks,
+            user_id,
+            "quest_completion",
+            f"Completed quest {quest_id}.",
+            event_id=f"manual-quest-completion:{quest_id}",
+        )
+    else:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+    return {
+        "quest_id": quest_id,
+        "progress": assignment.progress,
+        "status": assignment.status,
+        "completed": completed,
+    }
 
 
 @router.get("/{user_id}/profile", response_model=UserProfileResponse)

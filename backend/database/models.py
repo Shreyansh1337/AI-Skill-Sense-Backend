@@ -59,6 +59,59 @@ class UserLog(Base):
     )
 
 
+class UserWebhookCredential(Base):
+    __tablename__ = "user_webhook_credentials"
+
+    user_id = Column(String(50), primary_key=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+
+class HealthConnectPairing(Base):
+    __tablename__ = "health_connect_pairings"
+
+    code_hash = Column(String(64), primary_key=True)
+    user_id = Column(String(50), nullable=False, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    consumed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class HealthConnectDevice(Base):
+    __tablename__ = "health_connect_devices"
+
+    user_id = Column(String(50), primary_key=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    device_name = Column(String(100), nullable=False)
+    linked_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    last_sync_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class HealthConnectRecord(Base):
+    __tablename__ = "health_connect_records"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "source_record_id",
+            name="uq_health_connect_user_record",
+        ),
+    )
+
+    record_id = Column(String(100), primary_key=True)
+    user_id = Column(String(50), nullable=False, index=True)
+    source_record_id = Column(String(255), nullable=False)
+    record_type = Column(String(40), nullable=False)
+    value = Column(Float, nullable=False)
+    unit = Column(String(40), nullable=False)
+    start_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    end_time = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
 class RecentLog(Base):
     __tablename__ = "recent_logs"
 
