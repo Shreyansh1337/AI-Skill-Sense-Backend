@@ -331,7 +331,13 @@ def create_user_profile(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You cannot create another user's profile.",
         )
-    if _profile_has_data(current_user):
+    profile_user = db.query(User).filter(User.user_id == user_id).first()
+    if profile_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+    if _profile_has_data(profile_user):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A user profile already exists; use the profile update route.",
@@ -345,16 +351,16 @@ def create_user_profile(
         )
 
     for field, value in profile_data.items():
-        setattr(current_user, field, value)
+        setattr(profile_user, field, value)
 
     create_user_log(
         db,
         background_tasks,
-        current_user.user_id,
+        profile_user.user_id,
         "new_profile",
         "Created user profile.",
     )
-    return {"status": "created", "user_id": current_user.user_id}
+    return {"status": "created", "user_id": profile_user.user_id}
 
 
 @router.put(
@@ -378,7 +384,13 @@ def update_user_profile(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You cannot update another user's profile.",
         )
-    if not _profile_has_data(current_user):
+    profile_user = db.query(User).filter(User.user_id == user_id).first()
+    if profile_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+    if not _profile_has_data(profile_user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Create the user profile before updating it.",
@@ -392,16 +404,16 @@ def update_user_profile(
         )
 
     for field, value in profile_data.items():
-        setattr(current_user, field, value)
+        setattr(profile_user, field, value)
 
     create_user_log(
         db,
         background_tasks,
-        current_user.user_id,
+        profile_user.user_id,
         "profile_update",
         "Updated user profile.",
     )
-    return {"status": "updated", "user_id": current_user.user_id}
+    return {"status": "updated", "user_id": profile_user.user_id}
 
 
 @router.get("/{user_id}/logs", response_model=UserLogsResponse)
